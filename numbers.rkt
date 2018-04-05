@@ -1,5 +1,5 @@
 #lang racket
-(require "mk-typed.rkt")
+(require "mk.rkt")
 (provide (all-defined-out))
 
 (defrel (appendo l s out)

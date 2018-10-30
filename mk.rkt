@@ -2,19 +2,31 @@
 
 (provide defrel
          conde conda condu
+         condᵉ
          fresh
          run run*
-         == ≡ =/= absento numbero symbolo
+         == ≡ =/= ≠ absento numbero symbolo
          succeed fail
          prt)
 
 #|microKanren, Ch 10|#
 
-(struct Meta
-  (sym
-   scp
-   [val #:mutable #:auto]))
+(define nothing
+  (vector))
 
+(define (var sym scp)
+  (vector sym scp nothing))
+(define var? vector?)
+(define (var-has-val? x)
+  (not (equal? nothing (vector-ref x 2))))
+(define (var-val x)
+  (vector-ref x 2))
+(define (set-var-val! x v)
+  (vector-set! x 2 v))
+(define (var-scp x)
+  (vector-ref x 1))
+
+#;
 (struct State
   (s
    scp
@@ -25,17 +37,20 @@
 (struct Scope
   ())
 
+(define State
+  (λ (s scp t neqs abs)
+    `(,s ,scp ,t ,neqs ,abs)))
+
 (define init-S
   (State (make-immutable-hasheqv) (Scope) (make-immutable-hasheqv) '()
          (make-immutable-hasheqv)))
 
 (define (walk v s)
   (cond
-    [(Meta? v)
+    [(var? v)
      (cond
-       [(Meta-val v)
-        =>
-        (λ (v) (walk v s))]
+       [(var-has-val? v)
+        (walk (var-val v) s)]
        [(hash-ref s v #f)
         =>
         (λ (v) (walk v s))]
@@ -50,7 +65,7 @@
 (define (occurs? x v s)
   (let ([v (walk v s)])
     (cond
-      [(Meta? v) (eqv? v x)]
+      [(var? v) (eqv? v x)]
       [(pair? v) (or (occurs? x (car v) s)
                      (occurs? x (cdr v) s))]
       [else #f])))
@@ -60,25 +75,27 @@
         [v (walk v s)])
     (cond
       [(eqv? u v) (cons s new-pairs)]
-      [(Meta? u) (cond
-                   [(eqv? (Meta-scp u) scp)
-                    (begin (set-Meta-val! u v)
-                           (cons s `((,u . ,v) . ,new-pairs)))]
-                   [else
-                    (go-on ([s (ext-s u v s)])
-                      (cons s `((,u . ,v) . ,new-pairs)))])]
-      [(Meta? v) (cond
-                   [(eqv? (Meta-scp v) scp)
-                    (begin (set-Meta-val! v u)
-                           (cons s `((,v . ,u) . ,new-pairs)))]
-                   [else
-                    (go-on ([s (ext-s v u s)])
-                      (cons s `((,v . ,u) . ,new-pairs)))])]
+      [(var? u) (cond
+                  [(eqv? (var-scp u) scp)
+                   (begin (set-var-val! u v)
+                          (cons s `((,u . ,v) . ,new-pairs)))]
+                  [else
+                   (go-on ([s (ext-s u v s)])
+                     (cons s `((,u . ,v) . ,new-pairs)))])]
+      [(var? v) (cond
+                  [(eqv? (var-scp v) scp)
+                   (begin (set-var-val! v u)
+                          (cons s `((,v . ,u) . ,new-pairs)))]
+                  [else
+                   (go-on ([s (ext-s v u s)])
+                     (cons s `((,v . ,u) . ,new-pairs)))])]
       [(and (pair? u) (pair? v))
        (go-on ([`(,s . ,new-pairs) (unify (car u) (car v) s scp new-pairs)]
                [`(,s . ,new-pairs) (unify (cdr u) (cdr v) s scp new-pairs)])
          (cons s new-pairs))]
       [else #f])))
+
+
 
 (define (== u v)
   (λS (S @ s scp t neqs abs)
@@ -120,10 +137,8 @@
 
 (define call/fresh
   (λ (name f)
-    (λ (S)
-      (match S
-        [(State σ scp t neqs abs)
-         ((f (Meta name scp)) S)]))))
+    (λS (S @ s scp t neqs abs)
+        ((f (var name scp)) S))))
 
 (define (reify-name n)
   (string->symbol (string-append "_" (number->string n))))
@@ -131,7 +146,7 @@
 (define (walk* v s)
   (let ([v (walk v s)])
     (cond
-      [(Meta? v) v]
+      [(var? v) v]
       [(pair? v) (cons (walk* (car v) s)
                        (walk* (cdr v) s))]
       [else v])))
@@ -139,19 +154,18 @@
 (define (reify-s v s)
   (let ([v (walk v s)])
     (cond
-      [(Meta? v) (let ([n (hash-count s)])
-                   (let ([rn (reify-name n)])
-                     (hash-set s v rn)))]
+      [(var? v) (let ([n (hash-count s)])
+                  (let ([rn (reify-name n)])
+                    (hash-set s v rn)))]
       [(pair? v) (let ([s (reify-s (car v) s)])
                    (reify-s (cdr v) s))]
       [else s])))
 
-(define ((reify v) S)
-  (match S
-    [(State s scp t neqs abs)
-     (let ([v (walk* v s)])
-       (let ([names (reify-s v (make-immutable-hasheqv))])
-         (walk* v names)))]))
+(define (reify v) 
+  (λS (S @ s scp t neqs abs)
+      (let ([v (walk* v s)])
+        (let ([names (reify-s v (make-immutable-hasheqv))])
+          (walk* v names)))))
 
 (define (run-goal n g)
   ($take n (g init-S)))
@@ -200,7 +214,7 @@
                 (== `(,x₀ ,x ...) q)
                 g ...))]
     [(run n q g ...)
-     (let ([q (Meta 'q (Scope))])
+     (let ([q (var 'q (Scope))])
        (map (reify q) (run-goal n (conj g ...))))]))
 
 (define-syntax run*
@@ -219,6 +233,10 @@
   (syntax-rules ()
     [(conde (g ...) ...) ((call/new-scope) (disj (conj g ...) ...))]))
 
+(define-syntax condᵉ
+  (syntax-rules ()
+    [(condᵉ (g ...) ...) ((call/new-scope) (disj (conj g ...) ...))]))
+
 (define-syntax conda
   (syntax-rules ()
     [(conda (g₀ g ...)) (conj g₀ g ...)]
@@ -232,10 +250,8 @@
 
 (define (call/new-scope)
   (λ (g)
-    (λ (S)
-      (match S
-        [(State σ scp t neqs abs)
-         (g (State σ (Scope) t neqs abs))]))))
+    (λS (S @ s scp t neqs abs)
+        (g (State s (Scope) t neqs abs)))))
 
 #|other constraints|#
 
@@ -272,13 +288,13 @@
   (let ([u (car pr)]
         [v (cdr pr)])
     (cond
-      [(Meta? v) (let ([u-type (hash-ref types u #f)]
-                       [v-type (hash-ref types v #f)])
-                   (cond
-                     [(and u-type v-type) (and (eqv? u-type v-type) types)]
-                     [u-type (hash-set types v u-type)]
-                     [v-type (hash-set types u v-type)]
-                     [else types]))]
+      [(var? v) (let ([u-type (hash-ref types u #f)]
+                      [v-type (hash-ref types v #f)])
+                  (cond
+                    [(and u-type v-type) (and (eqv? u-type v-type) types)]
+                    [u-type (hash-set types v u-type)]
+                    [v-type (hash-set types u v-type)]
+                    [else types]))]
       [else (let ([u-type (hash-ref types u #f)])
               (cond
                 [u-type (and (u-type v) types)]
@@ -291,9 +307,9 @@
   (let ([u (walk u s)]
         [v (walk v s)])
     (cond
-      [(Meta? v) (let ([v-abs (hash-ref abs v #f)])
-                   (cons (cons `((,v . ,u)) neqs)
-                         (hash-set abs v (unicons u (or v-abs '())))))]
+      [(var? v) (let ([v-abs (hash-ref abs v #f)])
+                  (cons (cons `((,v . ,u)) neqs)
+                        (hash-set abs v (unicons u (or v-abs '())))))]
       [(pair? v) (go-on ([`(,neqs . ,abs) (not-appears u (car v) neqs abs s)])
                    (not-appears u (cdr v) neqs abs s))]
       [else (and (not (eqv? u v)) (cons neqs abs))])))
@@ -327,6 +343,8 @@
             `(,(State s scp t (cons new-pairs neqs) abs)))
         `(,S))))
 
+(define ≠ =/=)
+
 (define (booleano u)
   (typeo boolean? u))
 
@@ -336,24 +354,22 @@
 (define (symbolo u)
   (typeo symbol? u))
 
-(define ((typeo pred u) S)
-  (match S
-    [(State s scp t neqs abs)
-     (let ([u (walk u s)])
-       (cond
-         [(Meta? u) (let ([u-type (hash-ref t u #f)])
+(define (typeo pred u)
+  (λS (S @ s scp t neqs abs)
+      (let ([u (walk u s)])
+        (cond
+          [(var? u) (let ([u-type (hash-ref t u #f)])
                       (cond
                         [u-type (if (eqv? u-type pred) `(,S) '())]
                         [else `(,(State s scp (hash-set t u pred) neqs abs))]))]
-         [(pred u) `(,S)]
-         [else '()]))]))
+          [(pred u) `(,S)]
+          [else '()]))))
 
-(define ((absento u v) S)
-  (match S
-    [(State s scp t neqs abs)
-     (go-on ([`(,neqs . ,abs) (not-appears u v neqs abs s)])
-       `(,(State s scp t neqs abs))
-       '())]))
+(define (absento u v)
+  (λS (S @ s scp t neqs abs)
+      (go-on ([`(,neqs . ,abs) (not-appears u v neqs abs s)])
+        `(,(State s scp t neqs abs))
+        '())))
 
 #|syntax sugars|#
 
@@ -372,9 +388,24 @@
                        [p₀ (go-on ([p e] ...) then alter)]))]
        [else alter])]))
 
+(define (State-s S)
+  (car S))
+(define (State-scp S)
+  (car (cdr S)))
+(define (State-t S)
+  (car (cdr (cdr S))))
+(define (State-neqs S)
+  (car (cdr (cdr (cdr S)))))
+(define (State-abs S)
+  (car (cdr (cdr (cdr (cdr S))))))
+
 (define-syntax λS
   (syntax-rules (@)
     [(_ (S @ s scp t neqs abs) b)
      (λ (S)
-       (match S
-         [(State s scp t neqs abs) b]))]))
+       (let ([s (State-s S)]
+             [scp (State-scp S)]
+             [t (State-t S)]
+             [neqs (State-neqs S)]
+             [abs (State-abs S)])
+         b))]))

@@ -2,7 +2,7 @@
 
 #|
 This is a walk-through of making continuation RI.
-At the beginning, every is ready except for the `(,rator ,rand) line.
+At the beginning, everything is ready except for the `(,rator ,rand) line.
 |#
 
 (define ext-env
